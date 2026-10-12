@@ -373,7 +373,7 @@ class UrlChecker:
     def requests_retry_session(self,
         retries=4,
         backoff_factor=1.5,
-        status_forcelist=(500, 502, 504),
+        status_forcelist=(429, 500, 502, 504),
         session=None,
         ):
         session = session or requests.Session()
