@@ -7,6 +7,7 @@
 # Thanks to @jarsnah12 and @initroott for contributions!
 
 import requests
+import concurrent.futures
 from requests.exceptions import ConnectionError, ReadTimeout, Timeout
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
@@ -32,6 +33,9 @@ onedrive_enum_dir = os.path.dirname(os.path.abspath(__file__))
 sqldb_location = onedrive_enum_dir + '/data/onedrive_enum.db'
 survey_wordlist = 'USERNAMES/survey_script_top175_multi.txt'
 hostname = socket.gethostname()
+
+# Set once here rather than on every request
+requests.packages.urllib3.disable_warnings()
 
 
 ############ NEW GLOBAL VARIABLES HERE:
@@ -78,6 +82,9 @@ print("*************************************************************************
 
 
 
+_init_lock = threading.Lock()
+
+
 class UrlChecker:
     """Check URLs and handle associated operations."""
     def __init__(self, tenant_name, domain, environment, endpoint, userdata, appendString, skip_tried, mysql_conf, output):
@@ -98,6 +105,9 @@ class UrlChecker:
         self.totalcount = 0
         self.start_unix_time = 0
         self.status = '0'
+        self._lock = threading.Lock()
+        self._local = threading.local()
+        self._last_status = 0.0
         self.mysql_host = None
         self.mysql_db = None
         self.mysql_user = None
@@ -390,6 +400,37 @@ class UrlChecker:
         return session
 
 
+    def _ensure_shared_state(self):
+        # __init__ creates the shared state; instances built without it (object.__new__ in tests) get it here.
+        if "_lock" not in self.__dict__:
+            with _init_lock:
+                if "_lock" not in self.__dict__:
+                    self._local = threading.local()
+                    self._last_status = 0.0
+                    self._lock = threading.Lock()
+
+
+    def _get_session(self):
+        # One session per worker thread: connections are kept alive without sharing a Session across threads.
+        self._ensure_shared_state()
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = self.requests_retry_session()
+            self._local.session = session
+        return session
+
+
+    def _print_status(self, force=False):
+        # Bottom status bar, printed at most every 0.5 seconds unless forced.
+        self._ensure_shared_state()
+        with self._lock:
+            now = time.monotonic()
+            if not force and now - self._last_status < 0.5:
+                return
+            self._last_status = now
+            print(f'\r        {self.currentcount} / {self.totalcount} tested,  {self.validcount} valid,  {self.errorcount} errors\r', end='', flush=True)
+
+
     #>>>>> OneDrive Lookup Functions
 
     def check_url(self, username):
@@ -421,12 +462,11 @@ class UrlChecker:
         if debug:
             print("Url is: %s" % url)
 
-        requests.packages.urllib3.disable_warnings()
+        self._ensure_shared_state()
 
         #self.currentcount+=1
-        lock = threading.Lock()
         try:
-            r = self.requests_retry_session().head(url, timeout=8.0)
+            r = self._get_session().head(url, timeout=8.0)
             #print("Status code is: {}".format(r.status_code))
             status_code = str(r.status_code)
             if status_code in ['404', '301', '302']:
@@ -434,10 +474,10 @@ class UrlChecker:
                     print(f'[-] [{status_code}] INVALID USERNAME FOR {self.tenant_name},{self.domain} - {username}, username:{username}@{self.domain}')
             elif status_code in ['401', '403']:
                 currenttime = str(int(time.time()))
-                self.validcount+=1
+                with self._lock:
+                    self.validcount+=1
 
-                if self.output:
-                    with lock:
+                    if self.output:
                         with open (self.output_filename, "a") as output_file:
                             output_text = f'{username}@{self.domain}'
                             output_file.write(output_text + '\n')
@@ -448,30 +488,39 @@ class UrlChecker:
                 pass
             else:
                 print(f'[?] [{status_code} UNKNOWN RESPONSE FOR {self.tenant_name},{self.domain} - {username}, username:{username}@{self.domain}')
-                self.errorcount+=1
-            self.currentcount+=1
+                with self._lock:
+                    self.errorcount+=1
+            with self._lock:
+                self.currentcount+=1
 
-            # print our bottom status bar - thanks for the idea, TREVORspray!
-            print(f'\r        {self.currentcount} / {self.totalcount} tested,  {self.validcount} valid,  {self.errorcount} errors\r', end='', flush=True)
+            self._print_status()
 
         except requests.ConnectionError as e:
-            self.errorcount += 1
+            with self._lock:
+                self.errorcount += 1
+                self.currentcount += 1
             if verbose:
                 print("Error: %s" % e)
             print("Encountered connection error. Let's sleep on it.")
             time.sleep(3)
         except requests.Timeout as e:
-            self.errorcount += 1
+            with self._lock:
+                self.errorcount += 1
+                self.currentcount += 1
             if verbose:
                 print("Error: %s" % e)
             print("Read Timeout reached, sleeping for 3 seconds")
         except requests.RequestException as e:
-            self.errorcount += 1
+            with self._lock:
+                self.errorcount += 1
+                self.currentcount += 1
             if verbose:
                 print("Error: %s" % e)
             print("Request Exception - weird. Gonna sleep for 3")
         except Exception as e:
-            self.errorcount += 1
+            with self._lock:
+                self.errorcount += 1
+                self.currentcount += 1
             print("Well, I'm not sure what just happened. Onward we go...")
             print(e)
 
@@ -505,38 +554,22 @@ class UrlChecker:
             exit()
 
 
-        f = open(self.userdata)
-        listthread=[]
-        for userline in f:
-            global exitRequested
-            if exitRequested:
-                print("\nOkay, letting a few threads wrap up and then we are out of here\n")
+        global exitRequested
+        # Bound the work in flight so a huge wordlist is never queued in memory all at once
+        inflight = threading.BoundedSemaphore(2 * int(thread_count))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=int(thread_count)) as pool:
+            with open(self.userdata) as f:
+                for userline in f:
+                    if exitRequested:
+                        print("\nOkay, letting a few threads wrap up and then we are out of here\n")
+                        print("MARK IT A ZERO! We are gonna put in 1337000004 as our end time to denote a CANCEL")
+                        self.status = "1337000004"
+                        pool.shutdown(wait=True, cancel_futures=True)
+                        sys.exit(0)
+                    inflight.acquire()
+                    pool.submit(self.check_url, userline).add_done_callback(lambda _: inflight.release())
 
-                # we will always have at 1 thread -- us
-                while int(threading.active_count()) > 1:
-                    print("\n{0} thread remaining: Closing down gracefully.\n".format(int(threading.active_count())))
-                    time.sleep(5)
-                print("")
-
-                print("MARK IT A ZERO! We are gonna put in 1337000004 as our end time to denote a CANCEL")
-                self.status = "1337000004"
-                sys.exit(0)
-            while int(threading.active_count()) > int(thread_count):
-                #print "We have enough threads, sleeping."
-                time.sleep(1)
-
-            #print "Spawing thread for: " + userline + " thread(" + str(threading.active_count()) +")"
-            x = threading.Thread(target=self.check_url, args=(userline,))
-
-            listthread.append(x)
-            x.start()
-
-        f.close()
-
-
-        for i in listthread:
-            i.join()
-
+        self._print_status(force=True)
         print("\n\nOneDrive Enumeration Complete\n")
 
         # log the completion to our db
@@ -930,13 +963,13 @@ def main():
         killafter = args.killafter
         enableKillAfter = True
 
-    thread_count = args.threads
+    thread_count = int(args.threads)
 
     if verbose:
         print("Thread Count: {0}".format(thread_count))
 
     if args.threads:
-        thread_count = args.threads
+        thread_count = int(args.threads)
     else:
         thread_count = 100
 
