@@ -30,11 +30,21 @@ echo "Starting username generation..."
 OUTROOT="USERNAMES"
 WORKDIR=$(mktemp -d)
 trap 'rm -rf "${WORKDIR}"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
-# Normalize inputs: strip CRs, drop blank lines, de-duplicate (keeping order).
-clean() { tr -d '\r' < "$1" | awk 'NF && !seen[$0]++'; }
+# Normalize inputs: strip CRs, trim surrounding whitespace, drop blank lines,
+# de-duplicate (keeping order). The head-limited cross products therefore take
+# the first N *unique* names.
+clean() { tr -d '\r' < "$1" | awk '{gsub(/^[ \t]+|[ \t]+$/, "")} NF && !seen[$0]++'; }
 clean "$1" > "${WORKDIR}/first.all"
 clean "$2" > "${WORKDIR}/last.all"
+for f in first.all last.all; do
+	if [[ ! -s ${WORKDIR}/${f} ]]; then
+		echo "Error: ${f%.all} names file has no usable lines" >&2
+		exit 1
+	fi
+done
 
 # gen <dirname> <awk args...>
 # Runs awk and streams its output straight into split (no giant intermediate file).
@@ -43,7 +53,7 @@ gen() {
 	local name=$1; shift
 	local dir="${OUTROOT}/tron_${name}"
 	mkdir -p "${dir}"
-	find "${dir}" -maxdepth 1 -type f -name 'x*' -delete
+	find "${dir}" -maxdepth 1 -type f \( -name 'x*' -o -name full.txt \) -delete
 	awk "$@" | split -a 3 -l "${CHUNK_LINES}" - "${dir}/x"
 }
 
