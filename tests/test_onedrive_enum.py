@@ -106,7 +106,7 @@ def test_check_url_email_input_overrides_domain(make_checker, db_path):
     session = fake_session(404)
     with mock.patch.object(c, "requests_retry_session", return_value=session):
         c.check_url("jsmith@other.org")
-    assert "/personal/jsmith_other.org/" in session.head.call_args[0][0]
+    assert "/personal/jsmith_other_org/" in session.head.call_args[0][0]
 
 
 def test_check_url_unknown_status_counts_error(make_checker, db_path):
@@ -148,7 +148,7 @@ def test_sql_insert_user_is_idempotent(make_checker, db_path):
     c = make_checker()
     for _ in range(2):
         c.sql_insert_user("a@b.c", "a", "b.c", "t", "1", "commercial")
-    assert c.run_sqlite_query("select count(*) from onedrive_enum;") == [(2 - 1,)]
+    assert c.run_sqlite_query("select count(*) from onedrive_enum;") == [(1,)]
 
 
 def _autodiscover(*domains):
