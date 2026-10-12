@@ -1,0 +1,25 @@
+# Engagement output -- never commit client data.
+# The results DB and any harvested address lists stay local.
+data/*.db
+data/*.db-journal
+data/*.db-wal
+emails_*.txt
+
+# Generated candidate wordlists (generate_usernames_f17.sh output).
+# The curated lists checked in under USERNAMES/ and
+# USERNAMES/survey_script_175_v1/ are tracked and must stay tracked.
+USERNAMES/tron_*/
+
+# Local config -- may hold db credentials
+db.conf
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
