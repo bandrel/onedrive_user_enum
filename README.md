@@ -157,6 +157,15 @@ Beginning enumeration of https://microsoft-my.sharepoint.com/personal/USER_micro
 #### Note: Users that are valid but who have not yet signed into OneDrive will return a 404 not found.
 
 
+## Running tests:
+The tests run offline and stub the HTTP layer, so no traffic is sent to Microsoft.
+```
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt -r requirements-dev.txt
+.venv/bin/python -m pytest -q
+```
+
+
 ## references
 * https://github.com/Gerenios/AADInternals/
 * https://github.com/blacklanternsecurity/TREVORspray

@@ -391,15 +391,17 @@ class UrlChecker:
         """Check a URL and handle associated operations."""
         username = username.rstrip()
         safeusername = (username).replace(".","_")
+        # Local copy: check_url runs on many threads, so never write self.safe_domain here
+        safe_domain = self.safe_domain
         if ( "@" in safeusername ):
             if verbose:
                 print("Email address format detected, converting to username format")
-            self.safe_domain = safeusername.split("@")[1]
+            safe_domain = safeusername.split("@")[1]
             safeusername = safeusername.split("@")[0]
 
         safeusername = safeusername + self.appendString
 
-        url = f'https://{self.tenant_name}-my.{self.endpoint}/personal/{safeusername}_{self.safe_domain}/_layouts/15/onedrive.aspx'
+        url = f'https://{self.tenant_name}-my.{self.endpoint}/personal/{safeusername}_{safe_domain}/_layouts/15/onedrive.aspx'
         # Code to check the URL, handle request and process response
         if debug:
             print("Url is: %s" % url)
