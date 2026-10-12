@@ -124,16 +124,28 @@ class UrlChecker:
             self.get_sql_conf(mysql_conf)
         else:
             self.mysql_enabled = False
+            # sqlite carries no schema of its own until we make one
+            if enable_db:
+                self.sql_create_table()
 
         self.tenant_exists = self.test_connect()
 
     #>>>>> Database Functions
 
     def sql_create_table(self):
-        #if table does not exist
-        create_onedrive_enum = f"create table onedrive_enum(email_address text UNIQUE, username text, domain text, tenant text, scrape_date_unix int, environment text);"
-        create_onedrive_log = f"create table onedrive_log(ID INTEGER PRIMARY KEY autoincrement, userlist text, domain text, tenant text, environment text, append text, source_host text, deduped int, start_date_unix int, end_date_unix int, found int, errors int);"
-        
+        """Create the sqlite schema if it is not already present.
+
+        The schema used to exist only inside the committed data/onedrive_enum.db,
+        so the database was an undeclared build artifact: delete it, ignore it,
+        or move it and every query failed with "no such table" while the run
+        carried on reporting success. Build it on demand instead.
+        """
+        os.makedirs(os.path.dirname(sqldb_location), exist_ok=True)
+        create_onedrive_enum = "create table if not exists onedrive_enum(email_address text UNIQUE, username text, domain text, tenant text, scrape_date_unix int, environment text);"
+        create_onedrive_log = "create table if not exists onedrive_log(ID INTEGER PRIMARY KEY autoincrement, userlist text, domain text, tenant text, environment text, append text, source_host text, deduped int, start_date_unix int, end_date_unix int, found int, errors int);"
+        self.run_sqlite_query(create_onedrive_enum)
+        self.run_sqlite_query(create_onedrive_log)
+
 
     def get_sql_conf(self,mysql_conf):
         # this gets the sql configuration and saves it in self
@@ -198,9 +210,12 @@ class UrlChecker:
             conn = sqlite3.connect(sqldb_location)
             if verbose:
                 print(f"sqlite query is: {sqlite_query}")
-        except:
-            print("Error connecting to sqlite db")
- 
+        except sqlite3.Error as er:
+            # returning here matters: falling through left conn undefined, so a
+            # failed connect raised NameError instead of the message above
+            print(f"Error connecting to sqlite db at {sqldb_location}: {er}")
+            return None
+
         try:
             cursor = conn.execute(sqlite_query)
             conn.commit()
