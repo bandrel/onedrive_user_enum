@@ -73,7 +73,7 @@ options:
   -p , --playlist      file containing list of paths to user lists (wordlists) to try
   -a , --append        mutator: append a number, character, or string to a username
   -tr , --truncate     truncate to x characters
-  -T , --threads       total number of threads (defaut: 100)
+  -T , --threads       total number of threads (default: 50)
   -r, --rerun          force re-run of previously tested tenant/domain/wordlist combination
   -x, --skip-tried     dedupe. skip any usernames from previous runs
   -n, --no-db          disable logging to db
