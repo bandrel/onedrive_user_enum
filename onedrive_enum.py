@@ -307,6 +307,10 @@ class UrlChecker:
 
 
     def sql_insert_user(self, email_address, username, domain, tenant, currenttime, environment):
+        # --no-db has to suppress the discovered users as well, not just the
+        # run logging -- these rows are the sensitive part
+        if not enable_db:
+            return
         try:
             if self.mysql_enabled:
                 sql_query = f"INSERT IGNORE INTO onedrive_enum (email_address,username, domain, tenant, scrape_date_unix, environment) VALUES ('{email_address}','{username}','{domain}','{tenant}','{currenttime}','{environment}');"
