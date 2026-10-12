@@ -217,6 +217,8 @@ class UrlChecker:
 
 
     def sql_check_for_previous_runs(self, userfile):
+        if not enable_db:
+            return
         if verbose:
             print("Checking for previous runs of this exact combination.")
         try:
@@ -248,6 +250,8 @@ class UrlChecker:
 
 
     def sql_check_tried_usernames(self):
+        if not enable_db:
+            return []
         if verbose:
             print("Checking our tried users.")
 
@@ -290,6 +294,8 @@ class UrlChecker:
 
 
     def sql_insert_user(self, email_address, username, domain, tenant, currenttime, environment):
+        if not enable_db:
+            return
         try:
             if self.mysql_enabled:
                 sql_query = f"INSERT IGNORE INTO onedrive_enum (email_address,username, domain, tenant, scrape_date_unix, environment) VALUES ('{email_address}','{username}','{domain}','{tenant}','{currenttime}','{environment}');"

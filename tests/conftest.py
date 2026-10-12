@@ -34,6 +34,12 @@ class FakeSession:
         return FakeResponse()
 
 
+@pytest.fixture(autouse=True)
+def isolated_sqlite_db(monkeypatch, tmp_path):
+    # Never let a test touch the committed data/onedrive_enum.db.
+    monkeypatch.setattr(ode, "sqldb_location", str(tmp_path / "onedrive_enum.db"))
+
+
 @pytest.fixture
 def url_recorder():
     return UrlRecorder()
@@ -49,6 +55,7 @@ def checker(url_recorder):
     c.endpoint = "sharepoint.com"
     c.appendString = ""
     c.environment = "commercial"
+    c.mysql_enabled = False
     c.output = False
     c.errorcount = c.validcount = c.currentcount = c.totalcount = 0
     c.requests_retry_session = lambda *a, **k: FakeSession(url_recorder)
