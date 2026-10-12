@@ -104,6 +104,8 @@ class UrlChecker:
         self.mysql_pass = None
         self.mysql_port = 3306
         self.currentdir = os.getcwd()
+        # shared across worker threads - guards appends to the output file
+        self.output_lock = threading.Lock()
 
         if output:
             self.output = True
@@ -358,7 +360,7 @@ class UrlChecker:
     def requests_retry_session(self,
         retries=4,
         backoff_factor=1.5,
-        status_forcelist=(500, 502, 504),
+        status_forcelist=(429, 500, 502, 504),
         session=None,
         ):
         session = session or requests.Session()
@@ -391,15 +393,19 @@ class UrlChecker:
         """Check a URL and handle associated operations."""
         username = username.rstrip()
         safeusername = (username).replace(".","_")
+        # keep this per-call: worker threads run concurrently, so writing the
+        # domain back to self would let one thread's email-format line change
+        # the URL another thread is building
+        safe_domain = self.safe_domain
         if ( "@" in safeusername ):
             if verbose:
                 print("Email address format detected, converting to username format")
-            self.safe_domain = safeusername.split("@")[1]
+            safe_domain = safeusername.split("@")[1]
             safeusername = safeusername.split("@")[0]
 
         safeusername = safeusername + self.appendString
 
-        url = f'https://{self.tenant_name}-my.{self.endpoint}/personal/{safeusername}_{self.safe_domain}/_layouts/15/onedrive.aspx'
+        url = f'https://{self.tenant_name}-my.{self.endpoint}/personal/{safeusername}_{safe_domain}/_layouts/15/onedrive.aspx'
         # Code to check the URL, handle request and process response
         if debug:
             print("Url is: %s" % url)
@@ -407,7 +413,6 @@ class UrlChecker:
         requests.packages.urllib3.disable_warnings()
 
         #self.currentcount+=1
-        lock = threading.Lock()
         try:
             r = self.requests_retry_session().head(url, timeout=8.0)
             #print("Status code is: {}".format(r.status_code))
@@ -420,7 +425,7 @@ class UrlChecker:
                 self.validcount+=1
 
                 if self.output:
-                    with lock:
+                    with self.output_lock:
                         with open (self.output_filename, "a") as output_file:
                             output_text = f'{username}@{self.domain}'
                             output_file.write(output_text + '\n')
