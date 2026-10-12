@@ -1,3 +1,6 @@
+import concurrent.futures
+import itertools
+import os
 import threading
 import time
 
@@ -19,6 +22,8 @@ class Stats:
         self.peak = 0
         self.sessions = 0
         self.segments = []
+        self.pool = None
+        self.queue_peak = 0
 
 
 class ScriptedResponse:
@@ -38,6 +43,9 @@ class ConcurrentSession:
             self.stats.in_flight += 1
             self.stats.peak = max(self.stats.peak, self.stats.in_flight)
             self.stats.segments.append(segment)
+            if self.stats.pool is not None:
+                queued = self.stats.pool._work_queue.qsize()
+                self.stats.queue_peak = max(self.stats.queue_peak, queued)
         try:
             time.sleep(0.001)
         finally:
@@ -63,12 +71,11 @@ def stats(checker):
     return s
 
 
-@pytest.fixture
-def run_checker(checker, stats, tmp_path, monkeypatch):
+def prepare_run(checker, tmp_path, monkeypatch, lines=LINES):
     monkeypatch.setattr(ode, "thread_count", THREADS, raising=False)
     monkeypatch.setattr(ode, "exitRequested", False)
     path = tmp_path / "users.txt"
-    path.write_text("".join(f"user{i:04d}\n" for i in range(LINES)))
+    path.write_text("".join(f"user{i:04d}\n" for i in range(lines)))
     checker.userdata = str(path)
     checker.skip_tried = False
     checker.status = "0"
@@ -77,6 +84,22 @@ def run_checker(checker, stats, tmp_path, monkeypatch):
     checker.sql_log_completed_run = lambda userlist: completed.append(userlist)
     checker.completed = completed
     return checker
+
+
+@pytest.fixture
+def run_checker(checker, stats, tmp_path, monkeypatch):
+    return prepare_run(checker, tmp_path, monkeypatch)
+
+
+@pytest.fixture
+def recording_pool(stats, monkeypatch):
+    # Record the executor so the fake session can sample its work queue.
+    class RecordingPool(concurrent.futures.ThreadPoolExecutor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            stats.pool = self
+
+    monkeypatch.setattr(concurrent.futures, "ThreadPoolExecutor", RecordingPool)
 
 
 def test_check_user_file_exact_counts_and_bounded_concurrency(run_checker, stats, capsys):
@@ -118,3 +141,45 @@ def test_graceful_cancel_stops_before_submitting_work(run_checker, stats, monkey
     assert excinfo.value.code == 0
     assert run_checker.status == "1337000004"
     assert stats.segments == []
+
+
+def test_in_flight_work_stays_bounded(checker, stats, recording_pool, tmp_path, monkeypatch):
+    prepare_run(checker, tmp_path, monkeypatch, lines=2000)
+
+    checker.check_user_file()
+
+    assert stats.queue_peak <= 2 * THREADS
+
+
+def test_output_file_gets_each_valid_user_once(run_checker, stats, tmp_path):
+    run_checker.output = True
+    run_checker.output_filename = str(tmp_path / "found.txt")
+
+    run_checker.check_user_file()
+
+    with open(run_checker.output_filename) as f:
+        found = [line.rstrip("\n") for line in f]
+    expected = [f"user{i:04d}@contoso.com" for i in range(0, LINES, 4)]
+    assert sorted(found) == sorted(expected)
+    assert len(found) == LINES // 4
+
+
+def test_exception_escaping_check_url_is_reported_and_counted(run_checker, stats, monkeypatch, capsys):
+    # Fail the PAUSEFILE probe, which runs before check_url's try block, on every fifth call.
+    real_isfile = os.path.isfile
+    calls = itertools.count()
+
+    def flaky_isfile(path):
+        if path == "/tmp/PAUSEFILE" and next(calls) % 5 == 0:
+            raise OSError("pause probe failed")
+        return real_isfile(path)
+
+    monkeypatch.setattr(os.path, "isfile", flaky_isfile)
+
+    run_checker.check_user_file()
+
+    err = capsys.readouterr().err
+    assert err.count("Traceback (most recent call last)") == LINES // 5
+    assert "OSError: pause probe failed" in err
+    assert run_checker.currentcount == LINES == run_checker.totalcount
+    assert run_checker.errorcount >= LINES // 5

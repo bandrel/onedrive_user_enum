@@ -106,6 +106,7 @@ class UrlChecker:
         self.start_unix_time = 0
         self.status = '0'
         self._lock = threading.Lock()
+        self._output_lock = threading.Lock()
         self._local = threading.local()
         self._last_status = 0.0
         self.mysql_host = None
@@ -407,6 +408,7 @@ class UrlChecker:
                 if "_lock" not in self.__dict__:
                     self._local = threading.local()
                     self._last_status = 0.0
+                    self._output_lock = threading.Lock()
                     self._lock = threading.Lock()
 
 
@@ -477,7 +479,8 @@ class UrlChecker:
                 with self._lock:
                     self.validcount+=1
 
-                    if self.output:
+                if self.output:
+                    with self._output_lock:
                         with open (self.output_filename, "a") as output_file:
                             output_text = f'{username}@{self.domain}'
                             output_file.write(output_text + '\n')
@@ -554,9 +557,23 @@ class UrlChecker:
             exit()
 
 
+        self._ensure_shared_state()
         global exitRequested
         # Bound the work in flight so a huge wordlist is never queued in memory all at once
         inflight = threading.BoundedSemaphore(2 * int(thread_count))
+
+        def on_done(future):
+            # Runs on the worker thread. Surfaces exceptions that escaped check_url, which would otherwise vanish.
+            try:
+                if not future.cancelled() and future.exception() is not None:
+                    exc = future.exception()
+                    print("".join(traceback.format_exception(type(exc), exc, exc.__traceback__)), file=sys.stderr)
+                    with self._lock:
+                        self.errorcount += 1
+                        self.currentcount += 1
+            finally:
+                inflight.release()
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=int(thread_count)) as pool:
             with open(self.userdata) as f:
                 for userline in f:
@@ -567,7 +584,7 @@ class UrlChecker:
                         pool.shutdown(wait=True, cancel_futures=True)
                         sys.exit(0)
                     inflight.acquire()
-                    pool.submit(self.check_url, userline).add_done_callback(lambda _: inflight.release())
+                    pool.submit(self.check_url, userline).add_done_callback(on_done)
 
         self._print_status(force=True)
         print("\n\nOneDrive Enumeration Complete\n")
