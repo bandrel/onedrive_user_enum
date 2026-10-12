@@ -123,15 +123,21 @@ class UrlChecker:
         else:
             self.mysql_enabled = False
 
+        if enable_db and not self.mysql_enabled:
+            self.sql_create_table()
+
         self.tenant_exists = self.test_connect()
 
     #>>>>> Database Functions
 
     def sql_create_table(self):
         #if table does not exist
-        create_onedrive_enum = f"create table onedrive_enum(email_address text UNIQUE, username text, domain text, tenant text, scrape_date_unix int, environment text);"
-        create_onedrive_log = f"create table onedrive_log(ID INTEGER PRIMARY KEY autoincrement, userlist text, domain text, tenant text, environment text, append text, source_host text, deduped int, start_date_unix int, end_date_unix int, found int, errors int);"
-        
+        create_onedrive_enum = f"create table if not exists onedrive_enum(email_address text UNIQUE, username text, domain text, tenant text, scrape_date_unix int, environment text);"
+        create_onedrive_log = f"create table if not exists onedrive_log(ID INTEGER PRIMARY KEY autoincrement, userlist text, domain text, tenant text, environment text, append text, source_host text, deduped int, start_date_unix int, end_date_unix int, found int, errors int);"
+        os.makedirs(os.path.dirname(sqldb_location), exist_ok=True)
+        self.run_sqlite_query(create_onedrive_enum)
+        self.run_sqlite_query(create_onedrive_log)
+
 
     def get_sql_conf(self,mysql_conf):
         # this gets the sql configuration and saves it in self
@@ -192,13 +198,15 @@ class UrlChecker:
 
     def run_sqlite_query(self, sqlite_query):
         # this runs a sqlite query
+        conn = None
         try:
             conn = sqlite3.connect(sqldb_location)
             if verbose:
                 print(f"sqlite query is: {sqlite_query}")
         except:
             print("Error connecting to sqlite db")
- 
+            return None
+
         try:
             cursor = conn.execute(sqlite_query)
             conn.commit()
@@ -213,7 +221,8 @@ class UrlChecker:
             exc_type, exc_value, exc_tb = sys.exc_info()
             print(traceback.format_exception(exc_type, exc_value, exc_tb))
         finally:
-            conn.close()
+            if conn is not None:
+                conn.close()
 
 
     def sql_check_for_previous_runs(self, userfile):
