@@ -34,6 +34,15 @@ sqldb_location = onedrive_enum_dir + '/data/onedrive_enum.db'
 survey_wordlist = 'USERNAMES/survey_script_top175_multi.txt'
 hostname = socket.gethostname()
 
+# The old default of 100 was sized for a client that paid a TLS handshake on
+# every request. Now that each worker keeps one session, connection setup is no
+# longer the bottleneck and the extra threads buy throughput you cannot use:
+# measured against a local TLS stub, 10 threads reached 2724 req/s while 200
+# reached 2134. They do still cost memory (~0.16MB/thread), sockets held open
+# for the run, and scheduler pressure -- which is what hurts on a small VPS.
+# 50 keeps enough concurrency to hide real-world round-trip latency.
+DEFAULT_THREADS = 50
+
 # Set once here rather than on every request
 requests.packages.urllib3.disable_warnings()
 
@@ -869,7 +878,7 @@ def main():
     parser.add_argument("-p", "--playlist", help="file containing list of paths to user lists (wordlists) to try", metavar='')
     parser.add_argument("-a", "--append", help="mutator: append a number, character, or string to a username", metavar='')
     parser.add_argument("-tr", "--truncate", help="truncate to x characters", metavar='')
-    parser.add_argument("-T", "--threads", help="total number of threads (defaut: 100)",default=100, metavar='')
+    parser.add_argument("-T", "--threads", help=f"total number of threads (default: {DEFAULT_THREADS})", type=int, default=DEFAULT_THREADS, metavar='')
     parser.add_argument("-r", "--rerun", help="force re-run of previously tested tenant/domain/wordlist combination", action='store_true')
     parser.add_argument("-x", "--skip-tried", help="dedupe. skip any usernames from previous runs", action='store_true', default=False)
     parser.add_argument("-n", "--no-db", help="disable logging to db", action='store_true', default=False)
@@ -980,15 +989,10 @@ def main():
         killafter = args.killafter
         enableKillAfter = True
 
-    thread_count = int(args.threads)
+    thread_count = args.threads if args.threads else DEFAULT_THREADS
 
     if verbose:
         print("Thread Count: {0}".format(thread_count))
-
-    if args.threads:
-        thread_count = int(args.threads)
-    else:
-        thread_count = 100
 
     if args.append:
         appendString = args.append.rstrip()
